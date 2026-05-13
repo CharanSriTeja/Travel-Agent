@@ -1,10 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import { sendMessage } from "./api/chatApi";
+import { createBooking } from "./api/bookingApi";
+import { supabase } from "./lib/supabase";
+import { useAuth } from "./context/AuthContext";
+import AuthModal from "./components/AuthModal";
+import BookingsModal from "./components/BookingsModal";
 
 const SUGGESTIONS = [
-  "✈️ Flights from Hyderabad to Delhi tomorrow",
-  "🛫 Cheapest flights Mumbai to Bangalore",
-  "🌏 Flights to Goa this weekend",
+  "Flights from Hyderabad to Delhi tomorrow",
+  "Cheapest flights Mumbai to Bangalore",
+  "Flights to Goa this weekend",
 ];
 
 /* ─── Flight Markdown Parser ──────────────────────────────── */
@@ -31,7 +36,7 @@ function parseFlightsFromMarkdown(text) {
   return blocks.map((block, i) => {
     const stopsRaw = extractField(block, "Stops");
     const stopsNum = stopsRaw ? parseInt(stopsRaw) : 0;
-    const stopsLabel = stopsNum === 0 ? "Direct ✓" : `${stopsNum} stop${stopsNum > 1 ? "s" : ""}`;
+    const stopsLabel = stopsNum === 0 ? "Direct" : `${stopsNum} stop${stopsNum > 1 ? "s" : ""}`;
     const dep = extractField(block, "Departure Time");
     const arr = extractField(block, "Arrival Time");
     const isBest = i === 0 && text.includes("Best Overall");
@@ -79,11 +84,24 @@ function TypingIndicator() {
   );
 }
 
-function FlightCard({ flight }) {
+function FlightCard({ flight, onBook }) {
+  const [booking, setBooking] = useState(null);
   const stopColor = flight.stopsNum === 0 ? "#4ade80" : "#f5a623";
+
+  const handleBook = async () => {
+    if (booking === "done") return;
+    setBooking("loading");
+    try {
+      await onBook(flight);
+      setBooking("done");
+    } catch {
+      setBooking("error");
+    }
+  };
+
   return (
     <div style={{ ...styles.flightCard, ...(flight.isBest ? styles.flightCardBest : {}) }}>
-      {flight.isBest && <div style={styles.bestBadge}>⚡ Best Choice</div>}
+      {flight.isBest && <div style={styles.bestBadge}>Best Choice</div>}
       <div style={styles.flightHeader}>
         <div>
           <div style={styles.airline}>{flight.airline}</div>
@@ -118,13 +136,23 @@ function FlightCard({ flight }) {
 
       <div style={styles.flightFooter}>
         <span style={styles.cabinBadge}>{flight.cabin}</span>
-        <button style={styles.bookBtn}>Book Now →</button>
+        <button
+          style={{
+            ...styles.bookBtn,
+            ...(booking === "done" ? styles.bookBtnDone : {}),
+            ...(booking === "loading" ? styles.bookBtnLoading : {}),
+          }}
+          onClick={handleBook}
+          disabled={booking === "loading" || booking === "done"}
+        >
+          {booking === "loading" ? "Booking..." : booking === "done" ? "Booked!" : booking === "error" ? "Try Again" : "Book Now"}
+        </button>
       </div>
     </div>
   );
 }
 
-function MessageBubble({ msg }) {
+function MessageBubble({ msg, onBook }) {
   const isUser = msg.role === "user";
   if (isUser) {
     return (
@@ -151,7 +179,7 @@ function MessageBubble({ msg }) {
         )}
         {structuredFlights && structuredFlights.length > 0 && (
           <div style={styles.flightsGrid}>
-            {structuredFlights.map((f, i) => <FlightCard key={i} flight={f} />)}
+            {structuredFlights.map((f, i) => <FlightCard key={i} flight={f} onBook={onBook} />)}
           </div>
         )}
       </div>
@@ -161,14 +189,18 @@ function MessageBubble({ msg }) {
 
 /* ─── Main App ────────────────────────────────────────────── */
 export default function App() {
+  const { user } = useAuth();
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([
     {
       role: "ai",
-      content: "Hello! I'm your AI travel agent. Where would you like to fly today? I can search flights, trains, and buses for you.",
+      content: "Hello! I'm your AI travel agent. Where would you like to fly today? I can search flights for you.",
     },
   ]);
   const [loading, setLoading] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
+  const [showBookings, setShowBookings] = useState(false);
+  const [bookToast, setBookToast] = useState(null);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -197,6 +229,20 @@ export default function App() {
     }
   };
 
+  const handleBook = async (flight) => {
+    if (!user) {
+      setShowAuth(true);
+      throw new Error("Not authenticated");
+    }
+    await createBooking(flight);
+    setBookToast("Flight booked successfully!");
+    setTimeout(() => setBookToast(null), 3000);
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
   const handleKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
@@ -216,14 +262,37 @@ export default function App() {
               <div style={styles.logoSub}>AI Travel Assistant</div>
             </div>
           </div>
-          <div style={styles.statusBadge}>
-            <span style={styles.statusDot} />Online
+
+          <div style={styles.headerRight}>
+            {user ? (
+              <>
+                <button style={styles.navBtn} onClick={() => setShowBookings(true)}>
+                  My Bookings
+                </button>
+                <div style={styles.userInfo}>
+                  <div style={styles.userDot}>
+                    {(user.user_metadata?.full_name || user.email || "U")[0].toUpperCase()}
+                  </div>
+                  <span style={styles.userEmail}>
+                    {user.user_metadata?.full_name || user.email?.split("@")[0]}
+                  </span>
+                </div>
+                <button style={styles.signOutBtn} onClick={handleSignOut}>Sign Out</button>
+              </>
+            ) : (
+              <>
+                <div style={styles.statusBadge}>
+                  <span style={styles.statusDot} />Online
+                </div>
+                <button style={styles.signInBtn} onClick={() => setShowAuth(true)}>Sign In</button>
+              </>
+            )}
           </div>
         </header>
 
         <main style={styles.chatArea}>
           <div style={styles.chatInner}>
-            {chat.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
+            {chat.map((msg, i) => <MessageBubble key={i} msg={msg} onBook={handleBook} />)}
             {loading && <TypingIndicator />}
             <div ref={bottomRef} />
           </div>
@@ -259,6 +328,11 @@ export default function App() {
           </div>
           <p style={styles.footerNote}>Powered by AI · Results may vary</p>
         </footer>
+
+        {bookToast && <div style={styles.toast}>{bookToast}</div>}
+
+        {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+        {showBookings && <BookingsModal onClose={() => setShowBookings(false)} />}
       </div>
     </>
   );
@@ -283,13 +357,15 @@ const styles = {
   },
   header: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "18px 24px", background: "rgba(255,255,255,0.04)", backdropFilter: "blur(12px)",
+    padding: "14px 24px", background: "rgba(255,255,255,0.04)", backdropFilter: "blur(12px)",
     borderBottom: "1px solid rgba(255,255,255,0.07)", position: "sticky", top: 0, zIndex: 10,
+    gap: "12px", flexWrap: "wrap",
   },
   logoArea: { display: "flex", alignItems: "center", gap: "12px" },
   logoIcon: { fontSize: "22px", background: "linear-gradient(135deg, #1a6fff, #00cfff)", borderRadius: "10px", padding: "8px 10px" },
   logoName: { fontWeight: 700, fontSize: "17px", letterSpacing: "0.02em" },
   logoSub: { fontSize: "11px", color: "#7a8aaa", marginTop: "1px" },
+  headerRight: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
   statusBadge: {
     display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#4ade80",
     background: "rgba(74,222,128,0.08)", padding: "5px 12px", borderRadius: "20px",
@@ -298,6 +374,28 @@ const styles = {
   statusDot: {
     width: "7px", height: "7px", borderRadius: "50%",
     background: "#4ade80", boxShadow: "0 0 6px #4ade80", animation: "pulse 2s infinite",
+  },
+  navBtn: {
+    padding: "7px 14px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.06)", color: "#c8d8f0", fontSize: "13px",
+    fontWeight: 500, cursor: "pointer",
+  },
+  userInfo: { display: "flex", alignItems: "center", gap: "8px" },
+  userDot: {
+    width: "30px", height: "30px", borderRadius: "50%",
+    background: "linear-gradient(135deg, #1a6fff, #00cfff)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: "12px", fontWeight: 700, color: "#fff",
+  },
+  userEmail: { fontSize: "13px", color: "#c8d8f0", maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  signOutBtn: {
+    padding: "7px 14px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.1)",
+    background: "transparent", color: "#7a8aaa", fontSize: "12px", cursor: "pointer",
+  },
+  signInBtn: {
+    padding: "8px 18px", borderRadius: "8px", border: "none",
+    background: "linear-gradient(135deg, #1a6fff, #005fcc)", color: "#fff",
+    fontSize: "13px", fontWeight: 600, cursor: "pointer",
   },
   chatArea: { flex: 1, overflowY: "auto", padding: "24px 16px", zIndex: 1 },
   chatInner: { maxWidth: "860px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "20px" },
@@ -369,7 +467,12 @@ const styles = {
   bookBtn: {
     padding: "8px 18px", borderRadius: "8px", border: "1px solid rgba(26,111,255,0.4)",
     background: "rgba(26,111,255,0.1)", color: "#1a6fff", fontSize: "13px", fontWeight: 600, cursor: "pointer",
+    transition: "all 0.2s",
   },
+  bookBtnDone: {
+    border: "1px solid rgba(74,222,128,0.4)", background: "rgba(74,222,128,0.1)", color: "#4ade80", cursor: "default",
+  },
+  bookBtnLoading: { opacity: 0.6, cursor: "not-allowed" },
   suggestions: { display: "flex", gap: "8px", padding: "0 24px 12px", flexWrap: "wrap", justifyContent: "center", zIndex: 1 },
   suggestionChip: {
     padding: "8px 14px", borderRadius: "20px", border: "1px solid rgba(255,255,255,0.12)",
@@ -394,6 +497,13 @@ const styles = {
   },
   sendArrow: { color: "#fff", fontSize: "18px", fontWeight: 700 },
   footerNote: { textAlign: "center", fontSize: "11px", color: "#404a60", margin: "8px 0 0" },
+  toast: {
+    position: "fixed", bottom: "90px", left: "50%", transform: "translateX(-50%)",
+    background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)",
+    color: "#4ade80", padding: "12px 24px", borderRadius: "12px", fontSize: "14px",
+    fontWeight: 500, zIndex: 200, backdropFilter: "blur(8px)",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.3)", whiteSpace: "nowrap",
+  },
 };
 
 const globalStyles = `
