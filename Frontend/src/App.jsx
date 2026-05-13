@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { sendMessage } from "./api/chatApi";
 import { createBooking } from "./api/bookingApi";
-import { supabase } from "./lib/supabase";
+import { authApi } from "./lib/api";
 import { useAuth } from "./context/AuthContext";
 import AuthModal from "./components/AuthModal";
 import BookingsModal from "./components/BookingsModal";
@@ -240,7 +240,8 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    authApi.signout();
+    window.location.reload();
   };
 
   const handleKey = (e) => {
@@ -271,10 +272,10 @@ export default function App() {
                 </button>
                 <div style={styles.userInfo}>
                   <div style={styles.userDot}>
-                    {(user.user_metadata?.full_name || user.email || "U")[0].toUpperCase()}
+                    {(user.full_name || user.email || "U")[0].toUpperCase()}
                   </div>
                   <span style={styles.userEmail}>
-                    {user.user_metadata?.full_name || user.email?.split("@")[0]}
+                    {user.full_name || user.email?.split("@")[0]}
                   </span>
                 </div>
                 <button style={styles.signOutBtn} onClick={handleSignOut}>Sign Out</button>
